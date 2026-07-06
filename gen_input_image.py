@@ -31,6 +31,7 @@ Usage:
 
 import torch
 from torchvision import datasets, transforms
+import sys
 
 
 def quantize_tensor(tensor, num_bits=8):
@@ -89,35 +90,23 @@ def export_txt(q_image, scale, label, path="input_image.txt"):
         f.write("\n".join(lines))
     print(f"Written: {path}")
 
-
 def main():
+    # Accept optional image index as command-line argument (default 0)
+    image_idx = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+
     transform = transforms.ToTensor()
     test_set = datasets.MNIST(root="./data", train=False,
                                download=True, transform=transform)
-    image, label = test_set[0]
-    print(f"Loaded MNIST test image #0, true label = {label}")
+    image, label = test_set[image_idx]
+    print(f"Loaded MNIST test image #{image_idx}, true label = {label}")
 
     q_image, scale = quantize_tensor(image)
     print(f"Quantization scale: {scale:.6f}")
     print(f"Pixel range after quantization: [{q_image.min().item()}, {q_image.max().item()}]")
 
-    # Sanity check: the top-left patch should still be all zeros
-    # (same observation as verify_mac.py -- background border)
-    patch = q_image[0][0:3, 0:3]
-    print(f"Top-left 3x3 patch (should be all 0s -- background): {patch.tolist()}")
-
-    # And the patch we verified earlier (row=7, col=6) should be nonzero
-    patch2 = q_image[0][7:10, 6:9]
-    print(f"Verified patch (row=7,col=6, should match verify_mac golden inputs):")
-    print(f"  {patch2.tolist()}")
-    golden = [[42, 92, 79], [111, 127, 127], [33, 57, 36]]
-    if patch2.tolist() == golden:
-        print("  PASS: matches verify_mac.py golden input pixels exactly")
-    else:
-        print("  NOTE: values differ from golden -- your model may have been retrained")
-
     export_hex(q_image)
     export_txt(q_image, scale, label)
+    print(f"\nTo verify: run simulation and check 'Predicted digit: {label}'")
 
 
 if __name__ == "__main__":
