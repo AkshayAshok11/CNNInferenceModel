@@ -8,53 +8,59 @@
 // right input pixel and weight. After the 9th cycle it asserts `done`
 // for one cycle, then goes idle.
 //
-// The caller's job (the conv1 layer above this) is to:
-//   1. Assert `start` for one cycle to begin a new output pixel.
-//   2. Each cycle that `mac_valid` is high, look up input[oy+ky][ox+kx]
-//      and weight[oc][ky][kx] and feed them to the MAC unit.
-//   3. When `done` goes high, read the MAC accumulator, add bias,
-//      apply ReLU, and store the result.
+// IMPORTANT timing: `done` fires ONE cycle AFTER the last `mac_valid`.
+// This is necessary because input buffers use synchronous (registered)
+// reads: the address for step 8 is presented on the last mac_valid
+// cycle, but the pixel data arrives one cycle later. The DRAINING state
+// gives the MAC unit that extra cycle to accumulate the final pixel
+// before done signals the result is ready.
 //
-// This module also drives `mac_clear` high on the cycle BEFORE the
-// first `mac_valid`, so the MAC unit's accumulator is guaranteed to
-// be zero before the 9 new products start accumulating. The clear
-// happens combinationally one cycle ahead via the CLEARING state.
+// Without this, the caller (conv2) would read mac_acc one cycle too
+// early, missing the final accumulation step.
 //
 // State machine:
 //   IDLE     -> CLEARING (on start)
-//   CLEARING -> RUNNING  (mac_clear high for this one cycle)
-//   RUNNING  -> IDLE     (after 9 valid cycles; done pulses)
+//   CLEARING -> RUNNING  (mac_clear high for one cycle)
+//   RUNNING  -> DRAINING (after 9 valid cycles)
+//   DRAINING -> IDLE     (done pulses here, one cycle after last valid)
 
 module kernel_seq (
     input  logic       clk,
     input  logic       rst,
-    input  logic       start,     // pulse high for 1 cycle to begin
-    output logic [1:0] ky,        // current kernel row   (0..2)
-    output logic [1:0] kx,        // current kernel col   (0..2)
-    output logic       mac_valid, // high while MAC should accumulate
-    output logic       mac_clear, // high for 1 cycle to zero MAC acc
-    output logic       done       // high for 1 cycle when all 9 done
+    input  logic       start,
+    output logic [1:0] ky,        // current kernel row (for weight lookup)
+    output logic [1:0] kx,        // current kernel col (for weight lookup)
+    output logic [1:0] next_ky,   // next kernel row (for prefetch address)
+    output logic [1:0] next_kx,   // next kernel col (for prefetch address)
+    output logic       mac_valid,
+    output logic       mac_clear,
+    output logic       done
 );
 
-    // State encoding
     typedef enum logic [1:0] {
         IDLE     = 2'b00,
-        CLEARING = 2'b01,   // one cycle: clear the MAC accumulator
-        RUNNING  = 2'b10    // nine cycles: feed input/weight pairs
+        CLEARING = 2'b01,
+        RUNNING  = 2'b10,
+        DRAINING = 2'b11    // one extra cycle for final pixel to arrive
     } state_t;
 
     state_t state;
+    logic [3:0] step;
 
-    // Flat step counter: 0..8 maps to (ky=0,kx=0)..(ky=2,kx=2)
-    logic [3:0] step; // needs to count 0..8, so 4 bits
+    assign ky = step / 3;
+    assign kx = step % 3;
 
-    // Decode step -> (ky, kx)
-    assign ky = step / 3;   // 0,0,0,1,1,1,2,2,2
-    assign kx = step % 3;   // 0,1,2,0,1,2,0,1,2
+    // next_step: the step AFTER current (wraps to 0 after step 8)
+    // used to prefetch the next pixel one cycle early,
+    // compensating for the registered (1-cycle latency) input buffer.
+    logic [3:0] next_step;
+    assign next_step = (step == 4'd8) ? 4'd0 : step + 4'd1;
+    assign next_ky = next_step / 3;
+    assign next_kx = next_step % 3;
 
     assign mac_valid = (state == RUNNING);
     assign mac_clear = (state == CLEARING);
-    assign done      = (state == RUNNING) && (step == 4'd8);
+    assign done      = (state == DRAINING);  // fires one cycle AFTER last valid
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -69,24 +75,24 @@ module kernel_seq (
                 end
 
                 CLEARING: begin
-                    // Hold for one cycle so the MAC acc resets,
-                    // then immediately begin running.
                     state <= RUNNING;
                     step  <= 4'd0;
                 end
 
                 RUNNING: begin
                     if (step == 4'd8) begin
-                        // Just finished the 9th MAC (step 8).
-                        // done is already asserted combinationally above.
-                        state <= IDLE;
+                        state <= DRAINING;
                         step  <= 4'd0;
                     end else begin
                         step <= step + 4'd1;
                     end
                 end
 
-                default: state <= IDLE;
+                DRAINING: begin
+                    // done is high this cycle (combinational above).
+                    // The final pixel has now been accumulated by mac_unit.
+                    state <= IDLE;
+                end
             endcase
         end
     end

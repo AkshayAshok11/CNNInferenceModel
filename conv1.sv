@@ -50,7 +50,7 @@ module conv1 (
 
     // kernel_seq
     logic       seq_start, seq_done;
-    logic [1:0] ky, kx;
+    logic [1:0] ky, kx, next_ky, next_kx;
     logic       mac_valid, mac_clear;
 
     // mac_unit
@@ -77,6 +77,8 @@ module conv1 (
         .start    (seq_start),
         .ky       (ky),
         .kx       (kx),
+        .next_ky  (next_ky),
+        .next_kx  (next_kx),
         .mac_valid(mac_valid),
         .mac_clear(mac_clear),
         .done     (seq_done)
@@ -142,21 +144,12 @@ module conv1 (
     // Feed pixel to MAC (registered, one-cycle latency from input_buf)
     assign mac_in = pixel_out;
 
-    // Input buffer address: presented ONE CYCLE EARLY so pixel_out is
-    // ready when mac_valid is high. During CLEARING we present ky=0,kx=0.
-    // During RUNNING step i we present the address for step i+1
-    // (the kernel_seq ky/kx already advance on each clock edge, so
-    //  we can directly use the NEXT ky/kx -- but since ky/kx update
-    //  on the same edge that mac_valid is registered, we just use the
-    //  current ky/kx of kernel_seq which is always one step ahead of
-    //  what the MAC will consume next cycle).
-    //
-    // Simpler to think of it this way: input_buf always gets the
-    // address for whatever (ky,kx) kernel_seq is CURRENTLY showing,
-    // because by the time that becomes the MAC's input, one cycle has
-    // passed and pixel_out has settled.
-    assign pix_row = oy + {3'b0, ky};
-    assign pix_col = ox + {3'b0, kx};
+    // Input buffer address: use NEXT step's ky/kx for prefetch.
+    // input_buf has 1-cycle registered read latency: address presented
+    // this cycle → pixel available NEXT cycle. By addressing one step
+    // ahead, pixel[step_N] arrives exactly when step_N's MAC fires.
+    assign pix_row = oy + {3'b0, next_ky};
+    assign pix_col = ox + {3'b0, next_kx};
 
     // Output address and data: registered at the moment seq_done fires
     // (end of S_PIXEL), so they remain stable during S_STORE even as
