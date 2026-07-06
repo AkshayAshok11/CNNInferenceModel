@@ -73,25 +73,25 @@ module conv2_tb;
         @(posedge clk); #1;
         $display("done after %0d cycles", cycle_count);
 
-        // Test 1: ReLU clipping (oc=0, oy=0, ox=0 -> expect 0)
+        // Test 1: large positive clips to 127 (oc=0, oy=0, ox=0 -> addr=0)
         $display("");
-        $display("--- Test 1: ReLU clips negative (addr=0, expect 0) ---");
-        $display("    acc=-55445 + bias=14 = -55431 -> ReLU -> 0");
-        if (output_buf[0] === 8'sd0)
-            $display("PASS: output_buf[0] = 0");
+        $display("--- Test 1: large positive clips to 127 (addr=0, expect 127) ---");
+        $display("    acc=17724 + bias=-127 = 17597 -> clip -> 127");
+        if (output_buf[0] === 8'sd127)
+            $display("PASS: output_buf[0] = 127");
         else begin
-            $display("FAIL: output_buf[0] = %0d (expected 0)", output_buf[0]);
+            $display("FAIL: output_buf[0] = %0d (expected 127)", output_buf[0]);
             errors = errors + 1;
         end
 
-        // Test 2: positive saturation (oc=1, oy=7, ox=9 -> expect 127)
+        // Test 2: large negative ReLU clips to 0 (oc=1, oy=7, ox=9 -> addr=207)
         $display("");
-        $display("--- Test 2: 36-step accumulation + clip (addr=207, expect 127) ---");
-        $display("    acc=3613 + bias=-8 = 3605 -> clip -> 127");
-        if (output_buf[207] === 8'sd127)
-            $display("PASS: output_buf[207] = 127");
+        $display("--- Test 2: negative ReLU clips to 0 (addr=207, expect 0) ---");
+        $display("    acc=-16693 + bias=-33 = -16726 -> ReLU -> 0");
+        if (output_buf[207] === 8'sd0)
+            $display("PASS: output_buf[207] = 0");
         else begin
-            $display("FAIL: output_buf[207] = %0d (expected 127)", output_buf[207]);
+            $display("FAIL: output_buf[207] = %0d (expected 0)", output_buf[207]);
             errors = errors + 1;
         end
 
